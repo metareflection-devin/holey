@@ -103,6 +103,8 @@ class SymbolicTracer:
             return SymbolicFloat(other, tracer=self)
         if isinstance(other, str):
             return SymbolicStr(other, tracer=self)
+        if isinstance(other, list):
+            return SymbolicList(other, tracer=self)
         if isinstance(other, SymbolicSlice):
             return other.get_slice()
         return other
@@ -483,11 +485,47 @@ class SymbolicFloat:
         return self.__str__()
 
 class SymbolicList:
-    def __init__(self, value, name: Optional[str] = None, tracer: Optional[SymbolicTracer] = None):
-        self.tracer = tracer        
-        assert name is None       
-        assert isinstance(value, list), "Symbolic lists not yet supported: found "+str(value)+" of type "+str(type(value))
-        self.concrete = value
+    def __init__(self, value=None, name: Optional[str] = None, tracer: Optional[SymbolicTracer] = None):
+        self.tracer = tracer
+        self.concrete = None
+        self.name = name
+        if name is not None:
+            # Create a symbolic list - we'll use Z3's arrays to represent this
+            self.z3_expr = self.tracer.backend.Array(name, self.tracer.backend.IntSort(), self.tracer.backend.IntSort())
+        elif isinstance(value, list):
+            # Concrete list
+            self.concrete = value
+            # No z3_expr representation for concrete lists
+        else:
+            self.z3_expr = value
+            
+    def __eq__(self, other):
+        other = self.tracer.ensure_symbolic(other)
+        if self.concrete is not None and other.concrete is not None:
+            return SymbolicBool(self.concrete == other.concrete, tracer=self.tracer)
+        # For symbolic lists, check element by element equality
+        return SymbolicBool(self.tracer.backend.Eq(self.z3_expr, other.z3_expr), tracer=self.tracer)
+    
+    def __ne__(self, other):
+        other = self.tracer.ensure_symbolic(other)
+        if self.concrete is not None and other.concrete is not None:
+            return SymbolicBool(self.concrete != other.concrete, tracer=self.tracer)
+        return SymbolicBool(self.tracer.backend.Not(self.tracer.backend.Eq(self.z3_expr, other.z3_expr)), tracer=self.tracer)
+    
+    def __str__(self):
+        if self.concrete is not None:
+            return f"SymbolicList({self.concrete})"
+        return f"SymbolicList({self.name})"
+    
+    def __repr__(self):
+        return self.__str__()
+        
+    def __len__(self):
+        if self.concrete is not None:
+            return len(self.concrete)
+        # For symbolic lists, we need to return a symbolic expression
+        # This is a placeholder that will be used in truthy checks
+        return SymbolicInt(name=f"{self.name}_len" if self.name else None, tracer=self.tracer)
 
     def __contains__(self, item):
         item = self.tracer.ensure_symbolic(item)
@@ -537,9 +575,6 @@ class SymbolicList:
 
     def __iter__(self):
         return iter(self.concrete)
-
-    def __len__(self):
-        return len(self.concrete)
 
     def __add__(self, other):
         other = self.tracer.ensure_symbolic(other)
@@ -986,8 +1021,15 @@ class SymbolicSlice:
                 tracer=self.tracer
             )
         else:
-            # For lists, we still need to implement this
-            raise ValueError("Not implemented: symbolic list slicing")
+            # For lists, implement symbolic list slicing
+            if all(isinstance(x, (int, type(None))) for x in [start, end, step]):
+                # If all indices are concrete, just return the concrete slice
+                return SymbolicList(self.concrete[start:end:step], tracer=self.tracer)
+            else:
+                # For symbolic indices, create a symbolic list
+                # We don't have a concrete representation for this slice
+                slice_name = "slice" if not hasattr(self, 'name') or self.name is None else f"{self.name}_slice"
+                return SymbolicList(name=slice_name, tracer=self.tracer)
 
 class SymbolicRangeIterator:
     def __init__(self, sym_range):
@@ -1069,6 +1111,8 @@ def make_symbolic(typ: Type, name: str, tracer: Optional[SymbolicTracer] = None)
         sym = SymbolicFloat(name=name, tracer=tracer)
     elif typ == str or typ == 'str':
         sym = SymbolicStr(name=name, tracer=tracer)
+    elif typ == list or typ == 'list':
+        sym = SymbolicList(name=name, tracer=tracer)
     else:
         raise ValueError(f"Unsupported symbolic type: {typ}")
     return sym
@@ -1080,6 +1124,8 @@ def truthy(x):
         return x != 0
     elif isinstance(x, SymbolicStr):
         return x != ""
+    elif isinstance(x, SymbolicList):
+        return x.__len__() != 0
     elif isinstance(x, SymbolicSlice):
         return x != "" # TODO for list too
     else:

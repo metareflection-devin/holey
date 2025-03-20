@@ -785,5 +785,14 @@ class Backend():
 
     def SwapCase(self, x) -> MockExpr:
         return self._record("swapcase", x)
+        
+    def IntSort(self) -> MockExpr:
+        """Return an Int sort for use in arrays"""
+        return self._record("Int", "")
+        
+    def Array(self, name, index_sort, value_sort) -> MockExpr:
+        """Create a symbolic array (for lists)"""
+        self.solver.declarations.append((name, f'(Array {index_sort.to_smt2()} {value_sort.to_smt2()})'))
+        return self._record("Array", name, index_sort, value_sort)
 
 default_backend = Backend
