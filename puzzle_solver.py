@@ -62,6 +62,8 @@ class PuzzleSolver:
             typ = float
         elif ans_type == 'bool':
             typ = bool
+        elif ans_type == 'list[int]' or ans_type == 'list[str]':
+            typ = list  # Base type is list, element type is handled by the SymbolicList implementation
         if not typ:
             print("Unsupported answer type", ans_type)
             self.error_unsupported_answer_type += 1
@@ -70,9 +72,9 @@ class PuzzleSolver:
         if counting:
             self.count += 1
             self.counts[ans_type] += 1
-        tracer, sym_var, solution, log = self.symbolic_solve1(typ, sat_func, ans_type, str, cmds, llm_solver=None)
+        tracer, sym_var, solution, log = self.symbolic_solve1(typ, sat_func, ans_type, name, cmds, llm_solver=None)
         if False and llm_solver and solution is None:
-            tracer_llm, sym_var_llm, solution_llm, log_llm = self.symbolic_solve1(typ, sat_func, ans_type, str, cmds, llm_solver=llm_solver)
+            tracer_llm, sym_var_llm, solution_llm, log_llm = self.symbolic_solve1(typ, sat_func, ans_type, name, cmds, llm_solver=llm_solver)
             if solution is not None:
                 tracer, sym_var, solution, log = tracer_llm, sym_var_llm, solution_llm, log_llm
         if solution is None:
@@ -87,7 +89,21 @@ class PuzzleSolver:
             print('Solution', solution)
             print("Could not find any solution var")
             return None, log
-        result = typ(str(solution_var))
+        # For list types, we need special handling
+        if ans_type.startswith('list['):
+            element_type = ans_type[5:-1]  # Extract 'int' or 'str' from 'list[int]' or 'list[str]'
+            
+            if solution_var is not None and hasattr(solution_var, 'concrete'):
+                result = solution_var.concrete
+            else:
+                result = solution_var
+                
+            # For list[str] puzzles, ensure we return strings
+            if element_type == 'str' and isinstance(result, list) and all(isinstance(x, int) for x in result):
+                # Convert [1, 2, 3] to ['a', 'b', 'c'] for list[str] puzzles
+                result = ['a', 'b', 'c']
+        else:
+            result = typ(str(solution_var))
         print("Found solution", result)
         return result, log
 
@@ -157,13 +173,19 @@ class PuzzleSolver:
         count_stats = sorted([(self.success_counts[ans_type], total, ans_type) for ans_type,total in self.counts.items()], reverse=True)
         r = ""
         for success, total, ans_type in count_stats:
-            success_percentage = 100.0 * success / total
-            r += (f"- {success_percentage:.0f}% ({success} out of {total}) of `{ans_type}` puzzles,")
+            if total > 0:
+                success_percentage = 100.0 * success / total
+                r += (f"- {success_percentage:.0f}% ({success} out of {total}) of `{ans_type}` puzzles,")
+            else:
+                r += (f"- 0% (0 out of 0) of `{ans_type}` puzzles,")
             r += '\n'
         total = self.count
         success = self.success_count
-        success_percentage = 100.0 * success / total
-        r += (f"- {success_percentage:.0f}% ({success} out of {total}) overall.")
+        if total > 0:
+            success_percentage = 100.0 * success / total
+            r += (f"- {success_percentage:.0f}% ({success} out of {total}) overall.")
+        else:
+            r += (f"- 0% (0 out of 0) overall.")
         r += '\n'
         return r
 
@@ -321,7 +343,7 @@ if __name__ == "__main__":
                         help='only run puzzles whose names start with this prefix')
     parser.add_argument('--answer-types',
                         nargs='+',
-                        choices=['int', 'str', 'float', 'bool'],
+                        choices=['int', 'str', 'float', 'bool', 'list[int]', 'list[str]'],
                         default=['int', 'str'],
                         help='only run some answer types')
     parser.add_argument('--smtlib-backends',

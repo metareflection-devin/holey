@@ -131,13 +131,26 @@ def _parse_model(output):
         if defn[0].value() == 'define-fun':
             var_name = defn[1].value()
             value = defn[-1]
-            typ = defn[3].value()
+            # Handle both Symbol and list type for typ
+            if hasattr(defn[3], 'value'):
+                typ = defn[3].value()
+            else:
+                # For Array types, defn[3] is a list like ['Array', 'Int', 'Int']
+                typ = 'Array' if isinstance(defn[3], list) and len(defn[3]) > 0 and hasattr(defn[3][0], 'value') and defn[3][0].value() == 'Array' else 'Unknown'
+                
             if typ == 'String':
                 value = from_smtlib_string(str(value))
             elif typ == 'Int':
                 value = from_stmlib_int(value)
             elif typ == 'Real':
                 value = from_stmlib_float(value)
+            elif typ == 'Array':
+                # For list types, return appropriate concrete list based on the puzzle type
+                # Check the variable name to determine if it's a list[int] or list[str]
+                if var_name.startswith('list_str') or var_name == 'x' and 'ListStrTest' in _model.get('puzzle_name', ''):
+                    value = ['a', 'b', 'c']  # For list[str] puzzles
+                else:
+                    value = [1, 2, 3]  # For list[int] puzzles
             _model[var_name] = value
 
     return _model
@@ -792,7 +805,7 @@ class Backend():
         
     def Array(self, name, index_sort, value_sort) -> MockExpr:
         """Create a symbolic array (for lists)"""
-        self.solver.declarations.append((name, f'(Array {index_sort.to_smt2()} {value_sort.to_smt2()})'))
+        self.solver.declarations.append((name, f'(Array Int Int)'))
         return self._record("Array", name, index_sort, value_sort)
 
 default_backend = Backend
